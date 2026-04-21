@@ -140,7 +140,7 @@ async def chat():
         name="我的助手",
         instructions=build_instructions(),
         model=OpenAIChatCompletionsModel(
-            model="moonshot-v1-32k",
+            model="kimi-k2.6",
             openai_client=kimi_client,
         ),
         tools=[search_web, scrape_webpage, save_memory, get_memory],
