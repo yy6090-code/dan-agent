@@ -220,14 +220,9 @@ async def chat():
                     break
 
                 # 有工具调用，执行并把结果塞回历史
-                # 必须保留 reasoning_content，否则 kimi-k2.6 报 400
-                msg_dict = {"role": "assistant", "content": msg.content, "tool_calls": [
-                    {"id": tc.id, "type": "function", "function": {"name": tc.function.name, "arguments": tc.function.arguments}}
-                    for tc in msg.tool_calls
-                ]}
-                extra = getattr(msg, "model_extra", {}) or {}
-                if "reasoning_content" in extra:
-                    msg_dict["reasoning_content"] = extra["reasoning_content"]
+                # 用 model_dump 拿完整原始字典（含 reasoning_content）
+                raw = resp.model_dump()
+                msg_dict = raw["choices"][0]["message"]
                 history.append(msg_dict)
                 for tc in msg.tool_calls:
                     result = run_tool(tc.function.name, tc.function.arguments)
