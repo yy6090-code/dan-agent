@@ -6,6 +6,8 @@
 import os
 import sys
 import io
+import re
+import base64
 from pathlib import Path
 
 # 解决终端中文乱码
@@ -162,7 +164,25 @@ async def chat():
 
         print("Agent 思考中...")
         try:
-            result = await Runner.run(agent, history + [{"role": "user", "content": user_input}])
+            # 检测输入里有没有图片路径
+            image_paths = re.findall(r'(/[^\s]+\.(?:png|jpg|jpeg|gif|webp))', user_input, re.IGNORECASE)
+            if image_paths:
+                # 构建图文混合消息
+                content = []
+                text_part = user_input
+                for img_path in image_paths:
+                    if Path(img_path).exists():
+                        img_data = base64.b64encode(Path(img_path).read_bytes()).decode()
+                        ext = img_path.split('.')[-1].lower()
+                        mime = f"image/{ext}" if ext != 'jpg' else "image/jpeg"
+                        content.append({"type": "image_url", "image_url": {"url": f"data:{mime};base64,{img_data}"}})
+                        text_part = text_part.replace(img_path, "[图片]")
+                content.insert(0, {"type": "text", "text": text_part})
+                user_message = {"role": "user", "content": content}
+            else:
+                user_message = {"role": "user", "content": user_input}
+
+            result = await Runner.run(agent, history + [user_message])
             history = result.to_input_list()
             print(f"\nAgent：{result.final_output}\n")
         except Exception as e:
