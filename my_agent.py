@@ -17,6 +17,8 @@ if hasattr(sys.stdout, 'buffer'):
 if hasattr(sys.stderr, 'buffer'):
     sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace', line_buffering=True)
 
+import warnings
+warnings.filterwarnings("ignore", category=UserWarning, module="pydantic")
 from openai import AsyncOpenAI
 
 # 修复 httpx 不支持非 ASCII 请求头的问题
@@ -218,7 +220,15 @@ async def chat():
                     break
 
                 # 有工具调用，执行并把结果塞回历史
-                history.append(msg)
+                # 必须保留 reasoning_content，否则 kimi-k2.6 报 400
+                msg_dict = {"role": "assistant", "content": msg.content, "tool_calls": [
+                    {"id": tc.id, "type": "function", "function": {"name": tc.function.name, "arguments": tc.function.arguments}}
+                    for tc in msg.tool_calls
+                ]}
+                extra = getattr(msg, "model_extra", {}) or {}
+                if "reasoning_content" in extra:
+                    msg_dict["reasoning_content"] = extra["reasoning_content"]
+                history.append(msg_dict)
                 for tc in msg.tool_calls:
                     result = run_tool(tc.function.name, tc.function.arguments)
                     history.append({
