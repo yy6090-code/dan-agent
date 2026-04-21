@@ -205,32 +205,45 @@ async def chat():
         try:
             # 工具调用循环
             while True:
-                resp = await kimi_client.chat.completions.create(
+                raw_resp = await kimi_client.chat.completions.with_raw_response.create(
                     model=MODEL,
                     messages=history,
                     tools=TOOLS,
+                    extra_body={"thinking": {"type": "disabled"}},
                 )
-                msg = resp.choices[0].message
+                raw_dict = json.loads(raw_resp.content)
+                msg_dict = raw_dict["choices"][0]["message"]
+                tool_calls = msg_dict.get("tool_calls") or []
 
                 # 没有工具调用，直接输出
-                if not msg.tool_calls:
-                    reply = msg.content or ""
+                if not tool_calls:
+                    reply = msg_dict.get("content") or ""
                     history.append({"role": "assistant", "content": reply})
                     print(f"\nAgent：{reply}\n")
                     break
 
-                # 有工具调用，执行并把结果塞回历史
-                # 用 model_dump 拿完整原始字典（含 reasoning_content）
-                raw = resp.model_dump()
-                msg_dict = raw["choices"][0]["message"]
+                # 把 reasoning_content 设为 null（kimi-k2.6 要求）
+                msg_dict["reasoning_content"] = None
                 history.append(msg_dict)
-                for tc in msg.tool_calls:
-                    result = run_tool(tc.function.name, tc.function.arguments)
-                    history.append({
-                        "role": "tool",
-                        "tool_call_id": tc.id,
-                        "content": result,
-                    })
+
+                # 区分内置工具（Kimi自己执行）和外部工具（我们执行）
+                for tc in tool_calls:
+                    fn_name = tc["function"]["name"]
+                    if tc.get("type") == "builtin_function":
+                        # $web_search：把搜索结果原样回传（Kimi 用 search_id 查结果）
+                        history.append({
+                            "role": "tool",
+                            "tool_call_id": tc["id"],
+                            "content": tc["function"].get("arguments", ""),
+                        })
+                    else:
+                        # 外部工具（scrape_webpage/save_memory 等）：我们执行并回传
+                        result = run_tool(fn_name, tc["function"].get("arguments", "{}"))
+                        history.append({
+                            "role": "tool",
+                            "tool_call_id": tc["id"],
+                            "content": result,
+                        })
 
         except Exception as e:
             msg_str = str(e).encode('utf-8', errors='replace').decode('utf-8')
