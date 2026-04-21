@@ -166,25 +166,36 @@ async def chat():
         try:
             # 检测输入里有没有图片路径
             image_paths = re.findall(r'(/[^\s]+\.(?:png|jpg|jpeg|gif|webp))', user_input, re.IGNORECASE)
-            if image_paths:
-                # 构建图文混合消息
-                content = []
-                text_part = user_input
-                for img_path in image_paths:
-                    if Path(img_path).exists():
-                        img_data = base64.b64encode(Path(img_path).read_bytes()).decode()
-                        ext = img_path.split('.')[-1].lower()
-                        mime = f"image/{ext}" if ext != 'jpg' else "image/jpeg"
-                        content.append({"type": "image_url", "image_url": {"url": f"data:{mime};base64,{img_data}"}})
-                        text_part = text_part.replace(img_path, "[图片]")
-                content.insert(0, {"type": "text", "text": text_part})
-                user_message = {"role": "user", "content": content}
-            else:
-                user_message = {"role": "user", "content": user_input}
+            if image_paths and Path(image_paths[0]).exists():
+                # 图片消息：直接调 Kimi API（绕过 agents SDK）
+                img_path = image_paths[0]
+                img_data = base64.b64encode(Path(img_path).read_bytes()).decode()
+                ext = img_path.split('.')[-1].lower()
+                mime = f"image/{ext}" if ext != 'jpg' else "image/jpeg"
+                text_part = user_input.replace(img_path, "[图片]")
 
-            result = await Runner.run(agent, history + [user_message])
-            history = result.to_input_list()
-            print(f"\nAgent：{result.final_output}\n")
+                # 把之前的文字历史 + 本次图文消息一起发
+                text_history = [m for m in history if isinstance(m.get("content"), str)]
+                messages = text_history + [{
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": text_part},
+                        {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{img_data}"}}
+                    ]
+                }]
+                resp = await kimi_client.chat.completions.create(
+                    model="kimi-k2.6",
+                    messages=messages,
+                )
+                reply = resp.choices[0].message.content
+                # 把这轮对话加入历史（文字形式）
+                history.append({"role": "user", "content": f"{text_part}（含图片）"})
+                history.append({"role": "assistant", "content": reply})
+                print(f"\nAgent：{reply}\n")
+            else:
+                result = await Runner.run(agent, history + [{"role": "user", "content": user_input}])
+                history = result.to_input_list()
+                print(f"\nAgent：{result.final_output}\n")
         except Exception as e:
             msg = str(e).encode('utf-8', errors='replace').decode('utf-8')
             print(f"\n出错了：{msg}\n")
