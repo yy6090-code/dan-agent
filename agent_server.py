@@ -17,8 +17,8 @@ from pathlib import Path
 # browser_use 需要 python3.11，用懒加载避免启动时报错
 _browser_use_available = False
 try:
-    from langchain_openai import ChatOpenAI
     from browser_use import Agent as BrowserAgent
+    from browser_use.llm.openai.like import ChatOpenAILike
     _browser_use_available = True
 except ImportError:
     pass
@@ -103,14 +103,22 @@ async def browse_web(task: str) -> str:
     if not _browser_use_available:
         return "错误：browser_use 未安装，请用 python3.11 启动服务器"
     try:
-        llm = ChatOpenAI(
+        llm = ChatOpenAILike(
             model=MODEL,
             api_key=KIMI_API_KEY,
             base_url="https://api.moonshot.cn/v1",
+            temperature=1,         # Kimi K2.6 只允许 temperature=1
+            frequency_penalty=0,   # Kimi K2.6 只允许 frequency_penalty=0
         )
         agent = BrowserAgent(task=task, llm=llm)
-        result = await agent.run()
-        return str(result) if result else "任务完成，无输出"
+        history = await agent.run()
+        # 提取最后一条有意义的结果
+        final = history.final_result()
+        if final:
+            return str(final)
+        # 没有 final_result 就拼接所有 extracted_content
+        contents = [r.extracted_content for r in history.all_results if r.extracted_content]
+        return "\n".join(contents) if contents else "任务完成，无文字输出"
     except Exception as e:
         return f"浏览器操作出错：{e}"
 
