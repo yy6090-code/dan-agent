@@ -13,6 +13,15 @@ import json
 import time
 import asyncio
 from pathlib import Path
+
+# browser_use 需要 python3.11，用懒加载避免启动时报错
+_browser_use_available = False
+try:
+    from langchain_openai import ChatOpenAI
+    from browser_use import Agent as BrowserAgent
+    _browser_use_available = True
+except ImportError:
+    pass
 from fastapi import FastAPI, Request
 from fastapi.responses import StreamingResponse, JSONResponse
 import uvicorn
@@ -89,6 +98,22 @@ BLOCKED_COMMANDS = [
     "shutdown", "reboot", "halt",
 ]
 
+async def browse_web(task: str) -> str:
+    """让浏览器自动完成任务，比如点击、填表、登录、截图等"""
+    if not _browser_use_available:
+        return "错误：browser_use 未安装，请用 python3.11 启动服务器"
+    try:
+        llm = ChatOpenAI(
+            model=MODEL,
+            api_key=KIMI_API_KEY,
+            base_url="https://api.moonshot.cn/v1",
+        )
+        agent = BrowserAgent(task=task, llm=llm)
+        result = await agent.run()
+        return str(result) if result else "任务完成，无输出"
+    except Exception as e:
+        return f"浏览器操作出错：{e}"
+
 def run_shell(command: str) -> str:
     import subprocess
     cmd_lower = command.lower().strip()
@@ -112,6 +137,7 @@ TOOL_MAP = {
     "get_memory": get_memory,
     "search_web_tavily": search_web_tavily,
     "run_shell": run_shell,
+    "browse_web": browse_web,
 }
 
 TOOLS = [
@@ -149,6 +175,13 @@ TOOLS = [
             "command": {"type": "string", "description": "要执行的终端命令"}
         }, "required": ["command"]}
     }},
+    {"type": "function", "function": {
+        "name": "browse_web",
+        "description": "控制浏览器自动完成复杂网页任务，比如：自动点击按钮、填写表单、登录网站、截图、抓取动态内容。比 scrape_webpage 更强大，能和网页交互。",
+        "parameters": {"type": "object", "properties": {
+            "task": {"type": "string", "description": "用自然语言描述要完成的网页任务，例如：打开淘宝搜索iPhone 16并告诉我第一条结果的价格"}
+        }, "required": ["task"]}
+    }},
 ]
 
 def build_system_prompt() -> str:
@@ -161,11 +194,15 @@ def build_system_prompt() -> str:
 - 用户告诉你关于自己的信息，主动用 save_memory 记住
 - 用简洁清晰的中文回答{memory_section}"""
 
-def run_tool(name: str, arguments: str) -> str:
+async def run_tool(name: str, arguments: str) -> str:
     try:
         args = json.loads(arguments) if arguments else {}
         if name in TOOL_MAP:
-            return TOOL_MAP[name](**args)
+            result = TOOL_MAP[name](**args)
+            # browse_web 是 async，需要 await
+            if asyncio.iscoroutine(result):
+                return await result
+            return result
         return f"未知工具：{name}"
     except Exception as e:
         return f"工具执行出错：{e}"
@@ -183,7 +220,7 @@ async def run_agent(messages: list) -> str:
 
     history = list(messages)  # 复制一份，不污染原始列表
 
-    for _ in range(10):  # 最多循环10次工具调用，防止死循环
+    for _ in range(30):  # 最多循环30次工具调用，防止死循环
         raw_resp = await kimi_client.chat.completions.with_raw_response.create(
             model=MODEL,
             messages=history,
@@ -214,7 +251,7 @@ async def run_agent(messages: list) -> str:
                 })
             else:
                 # 我们的工具（scrape_webpage 等），执行后回传结果
-                result = run_tool(fn_name, tc["function"].get("arguments", "{}"))
+                result = await run_tool(fn_name, tc["function"].get("arguments", "{}"))
                 history.append({
                     "role": "tool",
                     "tool_call_id": tc["id"],
