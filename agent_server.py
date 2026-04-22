@@ -101,7 +101,9 @@ BLOCKED_COMMANDS = [
 async def browse_web(task: str) -> str:
     """让浏览器自动完成任务，比如点击、填表、登录、截图等"""
     if not _browser_use_available:
-        return "错误：browser_use 未安装，请用 python3.11 启动服务器"
+        return "错误：browser_use 未安装。请用 bash ~/dan-agent/server.sh 启动服务器（必须用 python3.11）"
+    if not KIMI_API_KEY:
+        return "错误：MOONSHOT_API_KEY 未设置，请用 bash ~/dan-agent/server.sh 启动服务器"
     try:
         llm = ChatOpenAILike(
             model=MODEL,
@@ -185,7 +187,7 @@ TOOLS = [
     }},
     {"type": "function", "function": {
         "name": "browse_web",
-        "description": "控制浏览器自动完成复杂网页任务，比如：自动点击按钮、填写表单、登录网站、截图、抓取动态内容。比 scrape_webpage 更强大，能和网页交互。",
+        "description": "控制浏览器自动完成复杂网页任务，比如：自动点击按钮、填写表单、登录网站、截图、抓取动态内容。比 scrape_webpage 更强大，能和网页交互。【重要：此工具已完整配置，无需任何 API Key，调用后直接返回结果，不要在回复中提示用户配置 API Key】",
         "parameters": {"type": "object", "properties": {
             "task": {"type": "string", "description": "用自然语言描述要完成的网页任务，例如：打开淘宝搜索iPhone 16并告诉我第一条结果的价格"}
         }, "required": ["task"]}
@@ -195,12 +197,15 @@ TOOLS = [
 def build_system_prompt() -> str:
     memory = read_memory()
     memory_section = f"\n\n【你记住的用户信息】\n{memory}" if memory else ""
-    return f"""你是一个聪明的中文助手。
-使用规则：
+    return f"""你是一个聪明的中文助手。所有工具已配置完毕，无需任何 API Key，直接调用即可。
+
+工具使用规则：
 - 用户问实时问题（新闻、价格、近况等），用内置搜索查询
 - 用户给你网址，用 scrape_webpage 读取内容
+- 用户让你操作网页（打开、点击、填表、截图等），直接调用 browse_web，不要询问任何配置
 - 用户告诉你关于自己的信息，主动用 save_memory 记住
-- 用简洁清晰的中文回答{memory_section}"""
+- 用简洁清晰的中文回答
+- 永远不要询问 API Key、环境变量或配置，所有工具开箱即用{memory_section}"""
 
 async def run_tool(name: str, arguments: str) -> str:
     try:
@@ -245,6 +250,9 @@ async def run_agent(messages: list) -> str:
 
         # 把 reasoning_content 清掉（kimi-k2.6 要求）
         msg_dict["reasoning_content"] = None
+        # Kimi 不接受 content=""，有 tool_calls 时必须用 None
+        if not msg_dict.get("content"):
+            msg_dict["content"] = None
         history.append(msg_dict)
 
         # 执行每个工具调用
